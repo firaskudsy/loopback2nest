@@ -1,6 +1,7 @@
 const {series, task} = require('gulp');
 const {src, dest} = require('gulp');
 var through = require('through2');
+var parser = require('gulp-file-parser');
 
 var rename = require('gulp-rename');
 
@@ -69,6 +70,7 @@ function generateDtoAndSchemaFromjson(collectionName, attributes) {
     next();
   });
 }
+
 function generateAngularApolloFromjson(collectionName, attributes) {
   'use strict';
   return through.obj(function (file, enc, next) {
@@ -334,50 +336,6 @@ ${generatedAttributes}
 
 export const ${collectionName}Schema = SchemaFactory.createForClass(${collectionName});`;
 }
-function getGraphQL(collectionName, filename, attributes) {
-  const generatedAttributes = attributes
-    .map((attribute) => {
-      //
-      const type = attribute.type
-        .replace(/string/g, 'String')
-        .replace(/number/g, 'Int')
-        .replace(/date/g, 'Date')
-        .replace(/Date/g, 'Date')
-        .replace(/boolean/g, 'Boolean')
-        .replace(/array/g, '[JSON]')
-        .replace(/object/g, 'JSON');
-      //
-      return `${attribute.key}: ${type}`;
-    })
-    .join('\n');
-
-  return `
-scalar JSON
-scalar Date
-
-type Mutation {
-  ${filename}_create(data: JSON): ${collectionName}
-  ${filename}_updateOne(where: JSON, data: JSON): ${collectionName}
-  ${filename}_updateMany(where: JSON, data: JSON): ${collectionName}
-}
-
-  type Query {
-  ${filename}(first: Int, skip: Int, where: JSON, sort:JSON, aggregation:JSON): [${collectionName}]
-  ${filename}_findById(_id:ID): ${collectionName}
-}
-
-type Subscription {
-  ${filename}Added: ${collectionName}
-  ${filename}Updated: ${collectionName}
-  ${filename}Deleted: ${collectionName}
-}
-
-
-type ${collectionName} {
-    _id:ID
-${generatedAttributes}
-}`;
-}
 
 function getModule(collectionName, filename) {
   return `import { Module } from '@nestjs/common';
@@ -413,6 +371,265 @@ import Redis from 'ioredis';
 export class ${collectionName}Module {}`;
 }
 
+function getApolloService(collectionName, filename) {
+  return `import { Injectable } from '@angular/core';
+import { Observable } from 'rxjs';
+import gql from 'graphql-tag';
+import { All${collectionName}GQL, ${collectionName}UpdatedGQL, Update${collectionName}GQL } from '../grapgql/${filename}.graphql';
+
+const update${collectionName} = gql\`
+ mutation($id:String!, $dat:JSON!) {
+  ${filename}_updateOne( where:{_id:$id},data:$dat){
+  _id
+}}
+\`;
+
+@Injectable({
+  providedIn: 'root'
+})
+export class AppService {
+
+  constructor(private all${collectionName}GQL: All${collectionName}GQL, private update${collectionName}GQL: Update${collectionName}GQL, private ${filename}Updated: ${collectionName}UpdatedGQL) { }
+
+  async ${filename}_updateOne(id: string, data: any) {
+    return this.update${collectionName}GQL.mutate(
+      {
+        id: id,
+        dat: data
+      }
+    );
+  }
+
+}
+`;
+}
+
+function getController(collectionName, filename) {
+  return `import { ${collectionName}Service } from './${filename}.service';
+import { Controller, Post, Get, Body } from '@nestjs/common';
+import { Create${collectionName}Dto } from './dto/${filename}.dto';
+import { ${collectionName} } from './schemas/${filename}.schema';
+
+@Controller('${filename}')
+export class ${collectionName}Controller {
+    constructor(private readonly ${filename}Service : ${collectionName}Service ) {
+}
+    @Post()
+    async create(@Body() create${collectionName}Dto: Create${collectionName}Dto) {
+        await this.${filename}Service.create(create${collectionName}Dto);
+    }
+
+    @Get()
+    async findAll(): Promise<${collectionName}[]> {
+        const res = await this.${filename}Service.findAll();
+
+        return res;
+    }
+}`;
+}
+function getGraphQL(collectionName, filename, attributes) {
+  const generatedAttributes = attributes
+    .map((attribute) => {
+      //
+      const type = attribute.type
+        .replace(/string/g, 'String')
+        .replace(/number/g, 'Int')
+        .replace(/date/g, 'Date')
+        .replace(/Date/g, 'Date')
+        .replace(/boolean/g, 'Boolean')
+        .replace(/array/g, '[JSON]')
+        .replace(/object/g, 'JSON');
+      //
+      return `${attribute.key}: ${type}`;
+    })
+    .join('\n');
+
+  return `
+scalar JSON
+scalar Date
+
+enum QueryOne {
+  findById
+  findBySID
+}
+
+enum QueryMany {
+  findBySID
+}
+
+enum Aggregate {
+  aggregate
+}
+
+type Mutation {
+  ${filename}_create(data: JSON): ${collectionName}
+  ${filename}_updateOne(where: JSON, data: JSON): ${collectionName}
+  ${filename}_updateMany(where: JSON, data: JSON): ${collectionName}
+  ${filename}_deleteOneById(_id:ID): ${collectionName}
+  ${filename}_deleteBySID(sid:ID): [${collectionName}]
+  ${filename}_deleteByQuery(where: JSON): [${collectionName}]
+}
+
+  type Query {
+  ${filename}(first: Int, skip: Int, where: JSON, sort:JSON, aggregation:JSON): [${collectionName}]
+  ${filename}_findById(_id:ID): ${collectionName}
+  ${filename}_queryOne(query: QueryOne, data: JSON): ${collectionName}
+  ${filename}_queryMany(query: QueryMany, data: JSON): [${collectionName}]
+  ${filename}_aggregate(query: Aggregate, data: JSON): [${collectionName}]
+}
+
+type Subscription {
+  ${filename}Added: ${collectionName}
+  ${filename}Updated: ${collectionName}
+  ${filename}Deleted: ${collectionName}
+}
+
+
+type ${collectionName} {
+    _id:ID
+${generatedAttributes}
+}`;
+}
+
+function getResolver(collectionName, filename) {
+  return `import { ${collectionName}Service } from './${filename}.service';
+import { Args, Int, Mutation, Parent, Query, ResolveField, Resolver, Subscription } from '@nestjs/graphql';
+import { Inject, UseGuards } from '@nestjs/common';
+import { PubSubEngine } from 'graphql-subscriptions';
+import { GqlAuthGuard } from 'src/GqlAuth/auth.guard';
+
+@Resolver('${collectionName}')
+export class ${collectionName}Resolver {
+    constructor(private ${filename}Services: ${collectionName}Service,@Inject('PUB_SUB') private pubSub: PubSubEngine) {
+    }
+
+@Query('${filename}_queryOne')
+    @UseGuards(GqlAuthGuard)
+    async queryOne(
+        @Args('query', { type: () => String }) query: string,
+        @Args('data', { type: () => JSON }) data: any) {
+        const _res = await this.${filename}Services.queryOne(query, data)
+        return _res;
+    }
+
+    @Query('${filename}_queryMany')
+    @UseGuards(GqlAuthGuard)
+    async queryMany(
+        @Args('query', { type: () => String }) query: string,
+        @Args('data', { type: () => JSON }) data: any) {
+        const _res = await this.${filename}Services.queryMany(query, data)
+        return _res;
+    }
+
+    @Query('${filename}_aggregate')
+    @UseGuards(GqlAuthGuard)
+    async aggregate(
+        @Args('query', { type: () => String }) query: string,
+        @Args('data', { type: () => JSON }) data: any) {
+        const _res = await this.${filename}Services.aggregate(query, data)
+        return _res;
+        }
+
+
+@Subscription()
+    ${filename}Added() {
+        return this.pubSub.asyncIterator('${filename}Added');
+    }
+
+    @Subscription()
+    ${filename}Updated() {
+        return this.pubSub.asyncIterator('${filename}Updated');
+    }
+
+    @Subscription()
+    ${filename}Deleted() {
+        return this.pubSub.asyncIterator('${filename}Deleted');
+    }
+
+   @Mutation('${filename}_create')
+    async createSite(@Args('data', { type: () => JSON }) data: any) {
+        const ${filename} = await this.${filename}Services.create(data);
+        this.pubSub.publish('${filename}Added', { ['${filename}Added']: ${filename} });
+        return ${filename}
+    }
+
+@Mutation('${filename}_deleteOneById')
+    @UseGuards(GqlAuthGuard)
+    async ${filename}DeleteOneById(@Args('_id', { type: () => String }) _id: string) {
+        const deleted = await this.${filename}Services.deleteOneById(_id);
+        this.pubSub.publish('${filename}Deleted', { ['${filename}Deleted']: deleted });
+        return deleted
+    }
+
+    @Mutation('${filename}_deleteBySID')
+    @UseGuards(GqlAuthGuard)
+    async ${filename}DeleteBySID(@Args('sid', { type: () => String }) sid: string) {
+        const deleted = await this.${filename}Services.deleteBySID(sid);
+        this.pubSub.publish('${filename}Deleted', { ['${filename}Deleted']: deleted });
+        return deleted
+    }
+
+    @Mutation('${filename}_deleteByQuery')
+    @UseGuards(GqlAuthGuard)
+    async ${filename}DeleteByQuery(@Args('where', { type: () => JSON }) where: any) {
+        const deleted = await this.${filename}Services.deleteByQuery(where);
+        this.pubSub.publish('${filename}Deleted', { ['${filename}Deleted']: deleted });
+        return deleted
+    }
+
+
+    @Mutation('${filename}_updateOne')
+    @UseGuards(GqlAuthGuard)
+    async updateOne(
+        @Args('where', { type: () => JSON }) where: any,
+        @Args('data', { type: () => JSON }) data: any) {
+        const _res = this.${filename}Services.updateOne(where, data)
+        this.pubSub.publish('${filename}Updated', { ['${filename}Updated']: _res });
+        return _res;
+    }
+
+    @Mutation('${filename}_updateMany')
+    @UseGuards(GqlAuthGuard)
+    async updateMany(
+        @Args('where', { type: () => JSON }) where: any,
+        @Args('data', { type: () => JSON }) data: any) {
+        const _res = this.${filename}Services.updateMany(where, data)
+        this.pubSub.publish('${filename}Updated', { ['${filename}Updated']: _res });
+        return _res;
+    }
+
+
+    @Query('${filename}')
+    // @UseGuards(GqlAuthGuard)
+    async getAll${collectionName}(
+        @Args('first', { type: () => Int }) first: number,
+        @Args('skip', { type: () => Int }) skip: number,
+        @Args('where', { type: () => JSON }) where: any,
+        @Args('sort', { type: () => JSON }) sort: any,
+        @Args('aggregation', { type: () => JSON }) aggregation: any,
+    ) {
+        const _where = where ? JSON.parse(JSON.stringify(where).replace(/__/g, '$')) : null;
+        const _sort = sort ? JSON.parse(JSON.stringify(sort).replace(/__/g, '$')) : null;
+        const _aggregation = aggregation ? JSON.parse(JSON.stringify(aggregation).replace(/__/g, '$')) : null;
+
+        return this.${filename}Services.findAll(first, skip, _where, _sort, _aggregation);
+    }
+
+   @Query('${filename}_findById')
+    async get${collectionName}(@Args('_id', { type: () => String }) _id: string) {
+        return this.${filename}Services.find(_id);
+    }
+
+
+    //@ResolveField('_domain')
+    // @UseGuards(GqlAuthGuard)
+    //async getDomain(@Parent() ${filename}) {
+    //    const { _id } = ${filename};
+    //    return this.domainsService.find(_id);
+    //}
+
+}`;
+}
 function getService(collectionName, filename) {
   return `import { Create${collectionName}Dto } from './dto/${filename}.dto';
 import { Injectable } from '@nestjs/common';
@@ -429,6 +646,42 @@ export class ${collectionName}Service {
 
         const created = new this.${filename}Model(create${collectionName}Dto);
         return created.save();
+    }
+
+    async queryOne(query: string, data: any): Promise<${collectionName}> {
+        const moduleSpecifier = './queries/'+query+'.query'
+        const Query = await import(moduleSpecifier)
+        const _schema = new Query.default(data).schema;
+        const _query = _schema.query;
+        return this.${filename}Model.findOne(_query);
+    }
+
+    async queryMany(query: string, data: any): Promise<${collectionName}[]> {
+        const moduleSpecifier = './queries/'+query+'.query'
+        const Query = await import(moduleSpecifier)
+        const _schema = new Query.default(data).schema;
+        const _query = _schema.query;
+        return this.${filename}Model.find(_query);
+    }
+
+    async aggregate(query: string, data: any): Promise<${collectionName}[]> {
+        const moduleSpecifier = './queries/'+query+'.query'
+        const Query = await import(moduleSpecifier)
+        const _schema = new Query.default(data).schema;
+        const _query = _schema.query;
+        return this.${filename}Model.aggregate(_query);
+    }
+
+async deleteOneById(_id: string): Promise<any> {
+        return this.${filename}Model.findByIdAndRemove(_id);
+    }
+
+    async deleteBySID(sid: string): Promise<any> {
+        return this.${filename}Model.findAndRemove({ sid });
+    }
+
+    async deleteByQuery(where: any): Promise<any> {
+        return this.${filename}Model.findAndRemove(where);
     }
 
     async updateOne(where: any, updates: any): Promise<${collectionName}> {
@@ -467,149 +720,6 @@ export class ${collectionName}Service {
 
         return this.${filename}Model.find({sid:_id}).exec();
     }
-
-}`;
-}
-
-function getApolloService(collectionName, filename) {
-  return `import { Injectable } from '@angular/core';
-import { Observable } from 'rxjs';
-import gql from 'graphql-tag';
-import { All${collectionName}GQL, ${collectionName}UpdatedGQL, Update${collectionName}GQL } from '../grapgql/${filename}.graphql';
-
-const update${collectionName} = gql\`
- mutation($id:String!, $dat:JSON!) {
-  ${filename}_updateOne( where:{_id:$id},data:$dat){
-  _id
-}}
-\`;
-
-@Injectable({
-  providedIn: 'root'
-})
-export class AppService {
-
-  constructor(private all${collectionName}GQL: All${collectionName}GQL, private update${collectionName}GQL: Update${collectionName}GQL, private siteUpdated: ${collectionName}UpdatedGQL) { }
-
-  async ${filename}_updateOne(id: string, data: any) {
-    return this.update${collectionName}GQL.mutate(
-      {
-        id: id,
-        dat: data
-      }
-    );
-  }
-
-}
-`;
-}
-
-function getController(collectionName, filename) {
-  return `import { ${collectionName}Service } from './${filename}.service';
-import { Controller, Post, Get, Body } from '@nestjs/common';
-import { Create${collectionName}Dto } from './dto/${filename}.dto';
-import { ${collectionName} } from './schemas/${filename}.schema';
-
-@Controller('${filename}')
-export class ${collectionName}Controller {
-    constructor(private readonly ${filename}Service : ${collectionName}Service ) {
-}
-    @Post()
-    async create(@Body() create${collectionName}Dto: Create${collectionName}Dto) {
-        await this.${filename}Service.create(create${collectionName}Dto);
-    }
-
-    @Get()
-    async findAll(): Promise<${collectionName}[]> {
-        const res = await this.${filename}Service.findAll();
-
-        return res;
-    }
-}`;
-}
-
-function getResolver(collectionName, filename) {
-  return `import { ${collectionName}Service } from './${filename}.service';
-import { Args, Int, Mutation, Parent, Query, ResolveField, Resolver, Subscription } from '@nestjs/graphql';
-import { Inject } from '@nestjs/common';
-import { PubSubEngine } from 'graphql-subscriptions';
-
-@Resolver('${collectionName}')
-export class ${collectionName}Resolver {
-    constructor(private ${filename}Services: ${collectionName}Service,@Inject('PUB_SUB') private pubSub: PubSubEngine) {
-    }
-
-@Subscription()
-    ${filename}Added() {
-        return this.pubSub.asyncIterator('${filename}Added');
-    }
-
-    @Subscription()
-    ${filename}Updated() {
-        return this.pubSub.asyncIterator('${filename}Updated');
-    }
-
-    @Subscription()
-    ${filename}Deleted() {
-        return this.pubSub.asyncIterator('${filename}Deleted');
-    }
-
-   @Mutation('${filename}_create')
-    async createSite(@Args('data', { type: () => JSON }) data: any) {
-        const site = await this.${filename}Services.create(data);
-        this.pubSub.publish('${filename}Added', { ['${filename}Added']: site });
-        return site
-    }
-
-
-
-    @Mutation('${filename}_updateOne')
-    async updateOne(
-        @Args('where', { type: () => JSON }) where: any,
-        @Args('data', { type: () => JSON }) data: any) {
-        const _res = this.${filename}Services.updateOne(where, data)
-        this.pubSub.publish('${filename}Updated', { ['${filename}Updated']: _res });
-        return _res;
-    }
-
-    @Mutation('${filename}_updateMany')
-    async updateMany(
-        @Args('where', { type: () => JSON }) where: any,
-        @Args('data', { type: () => JSON }) data: any) {
-        const _res = this.${filename}Services.updateMany(where, data)
-        this.pubSub.publish('${filename}Updated', { ['${filename}Updated']: _res });
-        return _res;
-    }
-
-
-    @Query('${filename}')
-    // @UseGuards(GqlAuthGuard)
-    async getAll${collectionName}(
-        @Args('first', { type: () => Int }) first: number,
-        @Args('skip', { type: () => Int }) skip: number,
-        @Args('where', { type: () => JSON }) where: any,
-        @Args('sort', { type: () => JSON }) sort: any,
-        @Args('aggregation', { type: () => JSON }) aggregation: any,
-    ) {
-        const _where = where ? JSON.parse(JSON.stringify(where).replace(/__/g, '$')) : null;
-        const _sort = sort ? JSON.parse(JSON.stringify(sort).replace(/__/g, '$')) : null;
-        const _aggregation = aggregation ? JSON.parse(JSON.stringify(aggregation).replace(/__/g, '$')) : null;
-
-        return this.${filename}Services.findAll(first, skip, _where, _sort, _aggregation);
-    }
-
-   @Query('${filename}_findById')
-    async get${collectionName}(@Args('_id', { type: () => String }) _id: string) {
-        return this.${filename}Services.find(_id);
-    }
-
-
-    //@ResolveField('_domain')
-    // @UseGuards(GqlAuthGuard)
-    //async getDomain(@Parent() ${filename}) {
-    //    const { _id } = ${filename};
-    //    return this.domainsService.find(_id);
-    //}
 
 }`;
 }
