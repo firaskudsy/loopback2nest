@@ -1,0 +1,11 @@
+[
+    {
+        "key":"name",
+        "type":"string"
+    },
+      {
+        "key":"type",
+        "type":"string"
+    }
+
+]

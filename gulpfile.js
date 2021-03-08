@@ -8,6 +8,7 @@ const {
 } = require('gulp');
 var through = require('through2')
 
+
 var rename = require("gulp-rename");
 
 var path = require('path');
@@ -20,10 +21,11 @@ var appModule = []
 function generateDtoAndSchemaFromjson(collectionName, attributes) {
     'use strict';
     return through.obj(function (file, enc, next) {
+        console.log('DEBUG: ~ file: gulpfile.js ~ line 24 ~ file', file);
         var mydata = JSON.parse(file.contents.toString('utf8'));
         var base = path.join(file.path, '..');
         var filename = path.basename(file.path, '.json');
-        const collectionaAttributes = Object.entries(mydata.properties).map((attribute) => {
+        const collectionaAttributes = Object.entries(mydata).map((attribute) => {
             return {
                 key: attribute[0],
                 type: attribute[1].type
