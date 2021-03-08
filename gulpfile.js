@@ -64,6 +64,14 @@ function generateDtoAndSchemaFromjson(collectionName, attributes) {
         contents: new Buffer(getResolver(mydata.name, filename))
       });
       this.push(resolverFile);
+
+          var controllerFile = new File({
+        base: base,
+        path: path.join(base, filename + '.controller.ts'),
+        contents: new Buffer(getController(mydata.name, filename))
+      });
+      this.push(controllerFile);
+
       appModule.push(`${mydata.name}Module`);
     }
 
@@ -343,28 +351,30 @@ import { ${collectionName}, ${collectionName}Schema } from './schema/${filename}
 import { MongooseModule } from '@nestjs/mongoose';
 import { ${collectionName}Service } from './${filename}.service';
 import { ${collectionName}Resolver } from './${filename}.resolver';
+import { ${collectionName}Controller } from './${filename}.controller';
 import { PubSub } from 'graphql-subscriptions';
 import { RedisPubSub } from 'graphql-redis-subscriptions';
 import Redis from 'ioredis';
 
 @Module({
     imports: [MongooseModule.forFeature([{ collection: ${collectionName}.name, name: ${collectionName}.name, schema: ${collectionName}Schema }])],
- providers: [${collectionName}Resolver, ${collectionName}Service, {
+ providers: [${collectionName}Resolver,${collectionName}Controller, ${collectionName}Service, {
     provide: 'PUB_SUB',
-    useFactory: () => {
+    useValue: new PubSub(),
+    // useFactory: () => {
 
 
-      return new RedisPubSub({
-        publisher: new Redis({
-          host: 'localhost',
-          port: 6379
-        }),
-        subscriber: new Redis({
-          host: 'localhost',
-          port: 6379
-        }),
-      });
-    },
+    //   return new RedisPubSub({
+    //     publisher: new Redis({
+    //       host: 'localhost',
+    //       port: 6379
+    //     }),
+    //     subscriber: new Redis({
+    //       host: 'localhost',
+    //       port: 6379
+    //     }),
+    //   });
+    // },
   }],
   exports: [ ${collectionName}Service],
 })
@@ -408,7 +418,7 @@ function getController(collectionName, filename) {
   return `import { ${collectionName}Service } from './${filename}.service';
 import { Controller, Post, Get, Body } from '@nestjs/common';
 import { Create${collectionName}Dto } from './dto/${filename}.dto';
-import { ${collectionName} } from './schemas/${filename}.schema';
+import { ${collectionName} } from './schema/${filename}.schema';
 
 @Controller('${filename}')
 export class ${collectionName}Controller {
